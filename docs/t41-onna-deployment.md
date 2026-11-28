@@ -96,37 +96,47 @@ A read-only audit of both running T41NQ cameras against latest upstream (`2026-1
 several high-impact optimizations and bugs worth addressing upstream and in future firmware builds:
 
 ### A. `raptor-hal` / `raptor` Detection Pipeline
-1. **`hal_ivs_onna.c` ignores `class_thresholds` (`Small6oy/raptor-hal` `onna-backend` `7f3443e`)**:
-   - `hal_ivs_onna.c` still runs its pre-#26 scalar `head_decode(..., c->conf_thresh)` instead of the
-     shared `hal_yolo_t` decoder from `gtxaspec/raptor-hal#26`. With `conf_threshold = 40` and
-     `class_thresholds = 40,30,40`, `pet` detections in `[0.30, 0.40)` are silently dropped.
-   - **Fix:** Wire `hal_ivs_onna.c` to `hal_yolo_init` / `hal_yolo_begin` / `hal_yolo_decode_head` /
-     `hal_yolo_finish` / `hal_yolo_emit` (matching `hal_ivs_ojzdl.c`), which fixes per-class
-     thresholds, removes ~115 duplicate lines, and eliminates per-frame `realloc`s.
+1. **`hal_ivs_onna.c` per-class `class_thresholds` (`Small6oy/raptor-hal` `onna-backend` `7f3443e` — FIXED & VERIFIED)**:
+   - Upstream `hal_ivs_onna.c` still ran its pre-#26 scalar `head_decode(..., c->conf_thresh)` instead
+     of the shared `hal_yolo_t` decoder from `gtxaspec/raptor-hal#26`, silently dropping `pet`
+     detections in `[0.30, 0.40)` under `conf_threshold = 40` / `class_thresholds = 40,30,40`.
+   - **Applied fix ([scripts/patches/hal_ivs_onna-hal_yolo.patch](../scripts/patches/hal_ivs_onna-hal_yolo.patch)):**
+     Wired `hal_ivs_onna.c` to `hal_yolo_init` / `hal_yolo_begin` / `hal_yolo_decode_head` /
+     `hal_yolo_finish` / `hal_yolo_emit` (preserving `.qgraph` anchor fallback via `onnaq_anchors`),
+     removing ~150 duplicate lines and per-frame `realloc`s, passing all 36 `raptor-hal` ASan unit
+     tests, and verified live on both T41NQ boards (`58.9 ms` mean, `13.0–13.1 MiB` `rvd` RSS;
+     reported upstream on [`gtxaspec/raptor-hal#25`](https://github.com/gtxaspec/raptor-hal/pull/25#issuecomment-7235619439)).
 2. **`rvd` standalone `yolo` `rmem` savings (`rvd_ivs.c`, `rvd_pipeline.c`)**:
    - Even when `algorithm = yolo` (standalone FrameSource read, never using IMP IVS), `rvd_ivs_init()`
      still creates and binds IMP IVS Group 0 to `stream1`. Skipping IVS group creation/bind in
      standalone mode avoids an extra bind hop and saves `rmem`.
-3. **Sidecar naming & `rmd` default**:
+3. **Sidecar naming & `rmd` default (VERIFIED LIVE)**:
    - `docs/model-conf.md` looks up `<stem>.conf` (`yoloxn3-v1_t41.conf`) or `<file>.conf`
      (`yoloxn3-v1_t41.bin.conf`) next to the `.bin`.
    - `rmd_main.c` defaults `[motion] record = true` even when `[recording] enabled = false`, logging
-     `recording start/stop command failed (RMR not running?)` on every detection; set
-     `[motion] record = false` (or default `record` to `[recording] enabled`).
+     `recording start/stop command failed (RMR not running?)` on every detection; adding
+     `record = false` under `[motion]` silences these warnings cleanly.
 
-### B. T41NQ Bootargs Memory Split (`mem` / `rmem` / `nmem`)
+### B. T41NQ Bootargs Memory Split (`mem` / `rmem` / `nmem`) & Upstream Firmware Upgrade (`master+6666647`)
 Measured IMP `rmem` usage for `2560x1440` + `640x360` + 2 JPEG channels at `nr_vbs=2` is **`33.13 MiB`**,
 and `ONNA` uses **0 bytes of `nmem`**:
 
-- **Noorio T110 (`mem=91M rmem=29M nmem=8M`)**: `rmem=29M` is `4.13 MiB` short of `nr_vbs=2`,
-  triggering an `IMP_FrameSource_EnableChn(0)` error, a 6-second boot stall, and `nr_vbs=1` fallback
-  (`96%` `rmem` full), while `nmem=8M` sits completely unused. Dropping `nmem` and moving to
-  **`mem=88M@0x0 rmem=40M@0x5800000`** (or upstream `noorio_t110`'s **`mem=82M@0x0 rmem=46M@0x5200000`**
-  in `themactep/thingino-firmware` `bd49939`) eliminates the stall and restores double-buffered DMA.
-- **Wyze Cam v4 (`mem=64M rmem=64M`)**: `30.87 MiB` (49 %) of `rmem` sits completely idle while
-  Linux is constrained to `58.9 MiB` total (`~5 MiB` `MemFree`, risking squashfs-reclaim / OOM
-  resets under load). Moving to **`mem=84M@0x0 rmem=44M@0x5400000`** (or `88M / 40M`) keeps
-  `7–11 MiB` free `rmem` headroom while giving Linux **+20 to +24 MiB** more RAM.
+- **Noorio T110 (`mem=91M rmem=29M nmem=8M` → `mem=84M@0x0 rmem=44M@0x5400000`, `0M nmem` — VERIFIED LIVE)**:
+  Upgraded to `themactep/thingino-firmware` `master+6666647` (`2026-11-28`) with `ONNA=1` +
+  `hal_yolo_t` + `raptor` `6902893` baked natively into `/rom/usr/bin/rvd`:
+  - Eliminated the `IMP_FrameSource_EnableChn(0)` allocation failure and 6-second boot stall (`nr_vbs=2` starts cleanly on boot with ~11 MiB `rmem` headroom).
+  - Reclaimed 8 MiB of unused `nmem`; Linux reports `47.8 MiB` available RAM (`80.1 MiB` total).
+  - Active upstream `wifi-aic8800` `ps_on=N` (`#2248`), `ric` `trigger = luma` (`#2242`, zero IR-cut clicking), and `rvd` `ONNA=1` (`58.9 ms` mean, `13.0 MiB` RSS) running directly from `/rom`.
+- **Wyze Cam v4 (`mem=64M rmem=64M` → `mem=84M@0x0 rmem=44M@0x5400000`)**:
+  Reclaims `20 MiB` from idle `rmem` (`30.87 MiB` previously unused) back to Linux (`+20 MiB` RAM)
+  while keeping `~11 MiB` free `rmem` headroom above the `33.13 MiB` `nr_vbs=2` peak.
+  > **CRITICAL Wyze Cam v4 OTA Upgrade Note (`#2067` / `9db4191`):** When upgrading a Wyze Cam v4
+  > from pre-`2026-11-19` Thingino firmware via kernel+rootfs OTA while preserving `/overlay`,
+  > **delete `"wlan": 78` from `/overlay/etc/thingino.json` BEFORE rebooting**. Newer `S36wireless`
+  > applies `gpio.wlan` on 4.4 kernels as well, and driving GPIO 78 as an output disables the
+  > ATBM6062S Wi-Fi radio until `/overlay/etc/thingino.json` is cleared or updated to match
+  > `/rom/etc/thingino.json` (which drops `"wlan": 78`). Also include `gtxaspec/raptor-hal#17` if
+  > runtime Gen3 `set-sinter` / `set-temper` NR tuning is used.
 
 ### C. High-Value Upstream Firmware & Raptor Upgrades (`2026-10-20` / `2026-11-16` → `2026-11-28`)
 - **`themactep/thingino-firmware`**:

@@ -18,6 +18,7 @@
 #   $BUILD_DIR/rvd-onna  (stripped MIPS32r2 XBurst2 uClibc binary for /usr/bin/rvd)
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BUILD_DIR=${1:-/tmp/t41-rvd-onna-build}
 HOST_ARCH=${HOST_ARCH:-$(uname -m)}
 HAL_REF=${HAL_REF:-onna-backend}
@@ -65,7 +66,11 @@ clone_or_keep raptor-common   https://github.com/gtxaspec/raptor-common.git
 clone_or_keep raptor-ipc      https://github.com/gtxaspec/raptor-ipc.git
 clone_or_keep raptor          https://github.com/Small6oy/raptor.git        "$RAPTOR_REF"
 
-echo "=== [3/5] Apply JZDL_LIBS override (#104) and class_thresholds config support ==="
+echo "=== [3/5] Apply hal_ivs_onna hal_yolo_t fix, JZDL_LIBS (#104), and class_thresholds ==="
+ONNA_PATCH="$SCRIPT_DIR/patches/hal_ivs_onna-hal_yolo.patch"
+if [ -f "$ONNA_PATCH" ] && ! grep -q 'hal_yolo_init' "$BUILD_DIR/raptor-hal/src/hal_ivs_onna.c"; then
+  git -C "$BUILD_DIR/raptor-hal" apply "$ONNA_PATCH"
+fi
 python3 - "$BUILD_DIR/raptor/Makefile" "$BUILD_DIR/raptor/rvd/rvd_ivs.c" <<'PY'
 import sys
 
