@@ -8,6 +8,7 @@ Design and roadmap for Thingino on-camera AI detection.
 - [benchmark.md](benchmark.md) — how we benchmark against the Aqara G100.
 - [jzdl-runtime.md](jzdl-runtime.md) — ojzdl, our own T31 JZDL runtime: bit-identical to libjzdl, MXU2 kernels, as fast on the camera.
 - [nna-runtime.md](nna-runtime.md) — toward an open T41 NNA runtime: what venus does, layer by layer, reproduced exactly in NumPy.
+- [t41-onna-deployment.md](t41-onna-deployment.md) — live T41NQ silicon results (`yoloxn3-v1` + `ONNA=1`), reproducible `rvd` cross-build, and firmware optimization notes.
 - [distillation.md](distillation.md) — training the camera model from a bigger teacher (YOLOX-S/M/L) or from its own float net; GPU guidance.
 - [aqara-g100-detections.md](aqara-g100-detections.md) — the G100 detection/event catalog (the commercial reference we borrow from).
 
